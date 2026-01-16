@@ -16,6 +16,7 @@ export { WebSocketProgramAccountSubscriber } from './accounts/webSocketProgramAc
 export { WebSocketProgramUserAccountSubscriber } from './accounts/websocketProgramUserAccountSubscriber';
 export { WebSocketProgramAccountsSubscriberV2 } from './accounts/webSocketProgramAccountsSubscriberV2';
 export { WebSocketDriftClientAccountSubscriberV2 } from './accounts/webSocketDriftClientAccountSubscriberV2';
+export { HeliusDriftClientAccountSubscriber } from './accounts/heliusDriftClientAccountSubscriber';
 export * from './accounts/bulkAccountLoader';
 export * from './accounts/bulkUserSubscription';
 export * from './accounts/bulkUserStatsSubscription';

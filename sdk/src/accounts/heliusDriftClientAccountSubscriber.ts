@@ -184,39 +184,28 @@ export class HeliusDriftClientAccountSubscriber
 
 		// Get RPC URL and validate it's a Helius URL
 		const rpcUrl = (this.program.provider as AnchorProvider).connection.rpcEndpoint;
-		this.heliusWsEndpoint = this.convertToHeliusEnhancedWsEndpoint(rpcUrl);
+		if (!this.verifyHeliusRpcUrl(rpcUrl)) {
+			throw new Error(
+				`HeliusDriftClientAccountSubscriber requires a Helius RPC URL. ` +
+				`Got: ${rpcUrl}. ` +
+				`Please use a Helius RPC URL (e.g., https://mainnet.helius-rpc.com/?api-key=YOUR_KEY)`
+			);
+		}
+		this.heliusWsEndpoint = rpcUrl;
 	}
 
 	/**
 	 * Convert a Helius RPC URL to the Enhanced WebSocket endpoint.
 	 * Validates that the URL is a Helius URL.
 	 */
-	private convertToHeliusEnhancedWsEndpoint(rpcUrl: string): string {
+	private verifyHeliusRpcUrl(rpcUrl: string): boolean {
 		const url = new URL(rpcUrl);
 
 		// Check if it's a Helius URL
 		if (!url.hostname.includes('helius-rpc.com') && !url.hostname.includes('helius.dev')) {
-			throw new Error(
-				`HeliusDriftClientAccountSubscriber requires a Helius RPC URL. ` +
-				`Got: ${url.hostname}. ` +
-				`Please use a Helius RPC URL (e.g., https://mainnet.helius-rpc.com/?api-key=YOUR_KEY)`
-			);
+			return false;
 		}
-
-		// Determine if mainnet or devnet from the URL
-		const isDevnet = url.hostname.includes('devnet');
-		const network = isDevnet ? 'devnet' : 'mainnet';
-
-		// Build the Enhanced WebSocket URL
-		const wsUrl = new URL(`wss://atlas-${network}.helius-rpc.com`);
-
-		// Preserve the API key from the original URL
-		const apiKey = url.searchParams.get('api-key');
-		if (apiKey) {
-			wsUrl.searchParams.set('api-key', apiKey);
-		}
-
-		return wsUrl.toString();
+		return true;
 	}
 
 	/**

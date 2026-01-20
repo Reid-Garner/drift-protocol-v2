@@ -150,6 +150,7 @@ export class HeliusDriftClientAccountSubscriber
 	private baseReconnectDelay = 1000;
 	private totalSubscriptionCount = 0;
 	private isReconnecting = false;
+	private pendingConnectionPromise: Promise<PooledConnection> | null = null;
 
 	protected isSubscribing = false;
 	protected subscriptionPromise: Promise<boolean>;
@@ -275,10 +276,26 @@ export class HeliusDriftClientAccountSubscriber
 			}
 		}
 
-		// No available connection, create a new one
-		const newConn = await this.createPooledConnection();
-		this.connectionPool.push(newConn);
-		return newConn;
+		// If a connection is already being created, wait for it
+		if (this.pendingConnectionPromise) {
+			const pendingConn = await this.pendingConnectionPromise;
+			// After waiting, check if it has room (might have been filled while waiting)
+			if (pendingConn.subscriptionCount < MAX_SUBSCRIPTIONS_PER_CONNECTION && pendingConn.ws.readyState === WebSocket.OPEN) {
+				return pendingConn;
+			}
+			// If not, recurse to find/create another
+			return this.getAvailableConnection();
+		}
+
+		// No available connection and none pending, create a new one with mutex
+		this.pendingConnectionPromise = this.createPooledConnection();
+		try {
+			const newConn = await this.pendingConnectionPromise;
+			this.connectionPool.push(newConn);
+			return newConn;
+		} finally {
+			this.pendingConnectionPromise = null;
+		}
 	}
 
 	/**
@@ -651,6 +668,13 @@ export class HeliusDriftClientAccountSubscriber
 
 		if (this.resubOpts?.logResubMessages) {
 			console.log(`[HeliusDriftClientAccountSubscriber] Subscribing to ${accountsToSubscribe.length} accounts`);
+		}
+
+		// Pre-create the first connection before starting parallel subscriptions
+		// This prevents race conditions where multiple parallel calls all try to create connections
+		if (this.connectionPool.length === 0) {
+			const firstConn = await this.createPooledConnection();
+			this.connectionPool.push(firstConn);
 		}
 
 		// Subscribe in batches to respect connection limits

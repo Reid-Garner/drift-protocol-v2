@@ -13,16 +13,74 @@ const FORK_TAG_PREFIX = 'reidg-'; // Optional: prefix for git tags to avoid conf
 // ============================================================================
 
 const skipChecks = process.argv.includes('--skip-checks');
+const bumpMode = process.argv.includes('--bump');
 const packageJsonPath = path.join(__dirname, '..', 'package.json');
+const versionFilePath = path.join(__dirname, '..', 'VERSION');
 
-// Get version from command line or prompt
-const versionArg = process.argv.find(arg => arg.match(/^\d+\.\d+\.\d+/));
-if (!versionArg) {
-	console.error('❌ Usage: node scripts/publish.js <version> [--skip-checks]');
-	console.error('   Example: node scripts/publish.js 2.155.0-beta.10');
-	process.exit(1);
+// Get version - either from --bump or command line
+let version;
+
+if (bumpMode) {
+	// Fetch current official drift-labs/sdk version from npm
+	let driftVersion;
+	try {
+		driftVersion = execSync('npm view @drift-labs/sdk version', { encoding: 'utf8' }).trim();
+		console.log(`📡 Official @drift-labs/sdk version: ${driftVersion}`);
+	} catch (error) {
+		console.error('❌ Failed to fetch @drift-labs/sdk version from npm');
+		process.exit(1);
+	}
+
+	// Parse drift version - e.g., "2.157.0" or "2.157.0-beta.1"
+	const driftMatch = driftVersion.match(/^(\d+\.\d+\.\d+)(?:-([a-zA-Z]+)\.(\d+))?$/);
+	if (!driftMatch) {
+		console.error(`❌ Cannot parse drift version: ${driftVersion}`);
+		process.exit(1);
+	}
+	const [, driftBase, driftPrerelease, driftNumStr] = driftMatch;
+	const driftNum = driftNumStr ? parseInt(driftNumStr, 10) : 0;
+	const prerelease = driftPrerelease || 'beta';
+
+	// Read current version from VERSION file
+	const currentVersion = fs.readFileSync(versionFilePath, 'utf8').trim();
+	const currentMatch = currentVersion.match(/^(\d+\.\d+\.\d+)(?:-([a-zA-Z]+)\.(\d+))?$/);
+	
+	if (!currentMatch) {
+		console.error(`❌ Cannot parse current version: ${currentVersion}`);
+		process.exit(1);
+	}
+
+	const [, currentBase, , currentNumStr] = currentMatch;
+	const currentNum = currentNumStr ? parseInt(currentNumStr, 10) : 0;
+
+	let newNum;
+	if (currentBase === driftBase) {
+		// Same base - take the max and add 1
+		newNum = Math.max(driftNum, currentNum) + 1;
+	} else {
+		// Different base - use drift's base and be 1 ahead of drift
+		newNum = driftNum + 1;
+	}
+
+	version = `${driftBase}-${prerelease}.${newNum}`;
+	
+	console.log(`📦 Bumping: ${currentVersion} → ${version}`);
+	
+	// Update VERSION file
+	fs.writeFileSync(versionFilePath, version + '\n');
+} else {
+	// Get version from command line
+	const versionArg = process.argv.find(arg => arg.match(/^\d+\.\d+\.\d+/));
+	if (!versionArg) {
+		console.error('❌ Usage: node scripts/publish.js <version> [--skip-checks]');
+		console.error('         node scripts/publish.js --bump [--skip-checks]');
+		console.error('   Example: node scripts/publish.js 2.155.0-beta.10');
+		console.error('   Example: node scripts/publish.js --bump');
+		process.exit(1);
+	}
+	version = versionArg;
 }
-const version = versionArg;
+
 const gitTag = `${FORK_TAG_PREFIX}v${version}`;
 
 // Derive npm dist-tag from version

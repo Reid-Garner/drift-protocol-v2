@@ -91,13 +91,11 @@ interface PooledConnection {
 /**
  * HeliusDriftClientAccountSubscriber
  *
- * Uses Helius Enhanced WebSockets for faster, more reliable account subscriptions.
- * Enhanced WebSockets are 1.5-2x faster than standard WebSockets and are powered
- * by the same infrastructure as LaserStream.
+ * Uses Helius WebSockets for account subscriptions with connection pooling.
  *
  * Key features:
  * - WebSocket connection pooling: opens multiple connections when needed
- * - ~80 subscriptions per connection (under 100 limit)
+ * - ~80 subscriptions per connection (under Solana's 100 limit)
  * - Automatic ping/pong to keep connections alive (30s interval)
  * - Reconnection with exponential backoff
  *
@@ -540,7 +538,9 @@ export class HeliusDriftClientAccountSubscriber
 				resolve: (id: number) => {
 					conn.subscriptionCount++;
 					this.totalSubscriptionCount++;
-					console.log(`[HeliusDriftClientAccountSubscriber] Subscribed to ${type} (${pubkey.slice(0, 8)}...) - total: ${this.totalSubscriptionCount}, conn ${this.connectionPool.indexOf(conn)}: ${conn.subscriptionCount}/${MAX_SUBSCRIPTIONS_PER_CONNECTION}`);
+					if (this.resubOpts?.logResubMessages) {
+						console.log(`[HeliusDriftClientAccountSubscriber] Subscribed to ${type} (${pubkey.slice(0, 8)}...) - total: ${this.totalSubscriptionCount}, conn ${this.connectionPool.indexOf(conn)}: ${conn.subscriptionCount}/${MAX_SUBSCRIPTIONS_PER_CONNECTION}`);
+					}
 					resolve(id);
 				},
 				reject,
@@ -617,8 +617,9 @@ export class HeliusDriftClientAccountSubscriber
 
 			const totalSubscriptions = this.connectionPool.reduce((sum, conn) => sum + conn.subscriptionCount, 0);
 			const totalDuration = performance.now() - startTime;
-			console.log(`[PROFILING] HeliusDriftClientAccountSubscriber.subscribe() completed in ${totalDuration.toFixed(2)}ms with ${totalSubscriptions} subscriptions across ${this.connectionPool.length} connections`);
-
+			if (this.resubOpts?.logResubMessages) {
+				console.log(`[PROFILING] HeliusDriftClientAccountSubscriber.subscribe() completed in ${totalDuration.toFixed(2)}ms with ${totalSubscriptions} subscriptions across ${this.connectionPool.length} connections`);
+			}
 			this.isSubscribed = true;
 			this.isSubscribing = false;
 			this.subscriptionPromiseResolver(true);

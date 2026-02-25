@@ -76,14 +76,20 @@ interface HeliusSubscriptionConfirmation {
 interface PooledConnection {
 	ws: WebSocket;
 	subscriptionCount: number;
-	subscriptionIdToAccount: Map<number, { type: string; pubkey: string; oracleInfo?: OracleInfo }>;
-	pendingSubscriptions: Map<number, {
-		resolve: (id: number) => void;
-		reject: (err: Error) => void;
-		type: string;
-		pubkey: string;
-		oracleInfo?: OracleInfo;
-	}>;
+	subscriptionIdToAccount: Map<
+		number,
+		{ type: string; pubkey: string; oracleInfo?: OracleInfo }
+	>;
+	pendingSubscriptions: Map<
+		number,
+		{
+			resolve: (id: number) => void;
+			reject: (err: Error) => void;
+			type: string;
+			pubkey: string;
+			oracleInfo?: OracleInfo;
+		}
+	>;
 	nextRequestId: number;
 	pingInterval?: ReturnType<typeof setInterval>;
 }
@@ -104,7 +110,8 @@ interface PooledConnection {
  * - Will throw an error if a non-Helius URL is detected
  */
 export class HeliusDriftClientAccountSubscriber
-	implements DriftClientAccountSubscriber {
+	implements DriftClientAccountSubscriber
+{
 	isSubscribed: boolean;
 	program: Program;
 	commitment: string;
@@ -120,8 +127,14 @@ export class HeliusDriftClientAccountSubscriber
 
 	// Account data storage
 	private stateAccountData?: DataAndSlot<StateAccount>;
-	private perpMarketAccountData = new Map<number, DataAndSlot<PerpMarketAccount>>();
-	private spotMarketAccountData = new Map<number, DataAndSlot<SpotMarketAccount>>();
+	private perpMarketAccountData = new Map<
+		number,
+		DataAndSlot<PerpMarketAccount>
+	>();
+	private spotMarketAccountData = new Map<
+		number,
+		DataAndSlot<SpotMarketAccount>
+	>();
 	private oracleData = new Map<string, DataAndSlot<OraclePriceData>>();
 
 	// Oracle maps
@@ -149,6 +162,10 @@ export class HeliusDriftClientAccountSubscriber
 	private totalSubscriptionCount = 0;
 	private isReconnecting = false;
 	private pendingConnectionPromise: Promise<PooledConnection> | null = null;
+
+	// Inactivity timeout (stall detection)
+	private receivingData = false;
+	private timeoutId?: ReturnType<typeof setTimeout>;
 
 	protected isSubscribing = false;
 	protected subscriptionPromise: Promise<boolean>;
@@ -181,13 +198,20 @@ export class HeliusDriftClientAccountSubscriber
 		this.resubOpts = resubOpts;
 		this.commitment = commitment ?? 'confirmed';
 
+		if (this.resubOpts?.resubTimeoutMs < 1000) {
+			throw new Error(
+				'resubTimeoutMs should be at least 1000ms to avoid spamming resub'
+			);
+		}
+
 		// Get RPC URL and validate it's a Helius URL
-		const rpcUrl = (this.program.provider as AnchorProvider).connection.rpcEndpoint;
+		const rpcUrl = (this.program.provider as AnchorProvider).connection
+			.rpcEndpoint;
 		if (!this.verifyHeliusRpcUrl(rpcUrl)) {
 			throw new Error(
 				`HeliusDriftClientAccountSubscriber requires a Helius RPC URL. ` +
-				`Got: ${rpcUrl}. ` +
-				`Please use a Helius RPC URL (e.g., https://mainnet.helius-rpc.com/?api-key=YOUR_KEY)`
+					`Got: ${rpcUrl}. ` +
+					`Please use a Helius RPC URL (e.g., https://mainnet.helius-rpc.com/?api-key=YOUR_KEY)`
 			);
 		}
 		this.heliusWsEndpoint = rpcUrl;
@@ -201,7 +225,10 @@ export class HeliusDriftClientAccountSubscriber
 		const url = new URL(rpcUrl);
 
 		// Check if it's a Helius URL
-		if (!url.hostname.includes('helius-rpc.com') && !url.hostname.includes('helius.dev')) {
+		if (
+			!url.hostname.includes('helius-rpc.com') &&
+			!url.hostname.includes('helius.dev')
+		) {
 			return false;
 		}
 		return true;
@@ -213,8 +240,15 @@ export class HeliusDriftClientAccountSubscriber
 	private async createPooledConnection(): Promise<PooledConnection> {
 		return new Promise((resolve, reject) => {
 			if (this.resubOpts?.logResubMessages) {
-				const maskedUrl = this.heliusWsEndpoint.replace(/api-key=[^&]+/, 'api-key=***');
-				console.log(`[HeliusDriftClientAccountSubscriber] Opening new pooled connection to ${maskedUrl} (pool size: ${this.connectionPool.length + 1})`);
+				const maskedUrl = this.heliusWsEndpoint.replace(
+					/api-key=[^&]+/,
+					'api-key=***'
+				);
+				console.log(
+					`[HeliusDriftClientAccountSubscriber] Opening new pooled connection to ${maskedUrl} (pool size: ${
+						this.connectionPool.length + 1
+					})`
+				);
 			}
 
 			const ws = new WebSocket(this.heliusWsEndpoint);
@@ -228,7 +262,9 @@ export class HeliusDriftClientAccountSubscriber
 
 			ws.on('open', () => {
 				if (this.resubOpts?.logResubMessages) {
-					console.log(`[HeliusDriftClientAccountSubscriber] Pooled connection ${this.connectionPool.length} opened`);
+					console.log(
+						`[HeliusDriftClientAccountSubscriber] Pooled connection ${this.connectionPool.length} opened`
+					);
 				}
 				this.startPingForConnection(pooledConn);
 				resolve(pooledConn);
@@ -239,7 +275,10 @@ export class HeliusDriftClientAccountSubscriber
 			});
 
 			ws.on('error', (error: Error) => {
-				console.error('[HeliusDriftClientAccountSubscriber] WebSocket error:', error);
+				console.error(
+					'[HeliusDriftClientAccountSubscriber] WebSocket error:',
+					error
+				);
 				if (!this.isSubscribed) {
 					reject(error);
 				}
@@ -247,7 +286,9 @@ export class HeliusDriftClientAccountSubscriber
 
 			ws.on('close', () => {
 				if (this.resubOpts?.logResubMessages) {
-					console.log('[HeliusDriftClientAccountSubscriber] Pooled connection closed');
+					console.log(
+						'[HeliusDriftClientAccountSubscriber] Pooled connection closed'
+					);
 				}
 				this.stopPingForConnection(pooledConn);
 				if (this.isSubscribed && !this.isReconnecting) {
@@ -269,7 +310,10 @@ export class HeliusDriftClientAccountSubscriber
 	private async getAvailableConnection(): Promise<PooledConnection> {
 		// Find a connection with room for more subscriptions
 		for (const conn of this.connectionPool) {
-			if (conn.subscriptionCount < MAX_SUBSCRIPTIONS_PER_CONNECTION && conn.ws.readyState === WebSocket.OPEN) {
+			if (
+				conn.subscriptionCount < MAX_SUBSCRIPTIONS_PER_CONNECTION &&
+				conn.ws.readyState === WebSocket.OPEN
+			) {
 				return conn;
 			}
 		}
@@ -278,7 +322,10 @@ export class HeliusDriftClientAccountSubscriber
 		if (this.pendingConnectionPromise) {
 			const pendingConn = await this.pendingConnectionPromise;
 			// After waiting, check if it has room (might have been filled while waiting)
-			if (pendingConn.subscriptionCount < MAX_SUBSCRIPTIONS_PER_CONNECTION && pendingConn.ws.readyState === WebSocket.OPEN) {
+			if (
+				pendingConn.subscriptionCount < MAX_SUBSCRIPTIONS_PER_CONNECTION &&
+				pendingConn.ws.readyState === WebSocket.OPEN
+			) {
 				return pendingConn;
 			}
 			// If not, recurse to find/create another
@@ -323,22 +370,32 @@ export class HeliusDriftClientAccountSubscriber
 	 */
 	private async handleReconnect(): Promise<void> {
 		if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-			console.error('[HeliusDriftClientAccountSubscriber] Max reconnection attempts reached');
-			this.eventEmitter.emit('error', new Error('Max reconnection attempts reached'));
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Max reconnection attempts reached'
+			);
+			this.eventEmitter.emit(
+				'error',
+				new Error('Max reconnection attempts reached')
+			);
 			return;
 		}
 
 		this.isReconnecting = true;
 		this.reconnectAttempts++;
-		const delay = this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
+		const delay =
+			this.baseReconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
 
 		if (this.resubOpts?.logResubMessages) {
-			console.log(`[HeliusDriftClientAccountSubscriber] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+			console.log(
+				`[HeliusDriftClientAccountSubscriber] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`
+			);
 		}
 
 		await new Promise((resolve) => setTimeout(resolve, delay));
 
 		try {
+			this.clearInactivityTimeout();
+
 			// Close all existing connections
 			for (const conn of this.connectionPool) {
 				this.stopPingForConnection(conn);
@@ -349,13 +406,59 @@ export class HeliusDriftClientAccountSubscriber
 			this.connectionPool = [];
 			this.totalSubscriptionCount = 0;
 
-			// Resubscribe to all accounts
+			// Resubscribe to all accounts and fetch fresh data
 			await this.subscribeToAllAccounts();
+			await this.fetch();
 			this.reconnectAttempts = 0;
 			this.isReconnecting = false;
+
+			// Restart inactivity detection
+			if (this.resubOpts?.resubTimeoutMs) {
+				this.receivingData = true;
+				this.startInactivityTimeout();
+			}
+
+			if (this.resubOpts?.logResubMessages) {
+				console.log(
+					'[HeliusDriftClientAccountSubscriber] Reconnected and fetched fresh data'
+				);
+			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Reconnection failed:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Reconnection failed:',
+				error
+			);
 			this.handleReconnect();
+		}
+	}
+
+	/**
+	 * Start/reset the inactivity timeout. If no WS data arrives within
+	 * resubOpts.resubTimeoutMs, triggers a full reconnect.
+	 */
+	private startInactivityTimeout(): void {
+		if (!this.resubOpts?.resubTimeoutMs) return;
+
+		this.clearInactivityTimeout();
+		this.timeoutId = setTimeout(async () => {
+			if (this.isReconnecting) return;
+
+			if (this.receivingData) {
+				if (this.resubOpts?.logResubMessages) {
+					console.log(
+						`[HeliusDriftClientAccountSubscriber] No ws data in ${this.resubOpts?.resubTimeoutMs}ms, reconnecting`
+					);
+				}
+				this.receivingData = false;
+				this.handleReconnect();
+			}
+		}, this.resubOpts.resubTimeoutMs);
+	}
+
+	private clearInactivityTimeout(): void {
+		if (this.timeoutId) {
+			clearTimeout(this.timeoutId);
+			this.timeoutId = undefined;
 		}
 	}
 
@@ -385,23 +488,38 @@ export class HeliusDriftClientAccountSubscriber
 
 			// Handle account notification
 			if (message.method === 'accountNotification') {
-				this.handleAccountNotification(conn, message as HeliusAccountNotification);
+				if (this.resubOpts?.resubTimeoutMs) {
+					this.receivingData = true;
+					this.startInactivityTimeout();
+				}
+				this.handleAccountNotification(
+					conn,
+					message as HeliusAccountNotification
+				);
 			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Error parsing message:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Error parsing message:',
+				error
+			);
 		}
 	}
 
 	/**
 	 * Handle account notification - direct account data, no fetching needed
 	 */
-	private handleAccountNotification(conn: PooledConnection, notification: HeliusAccountNotification): void {
+	private handleAccountNotification(
+		conn: PooledConnection,
+		notification: HeliusAccountNotification
+	): void {
 		const subscriptionId = notification.params.subscription;
 		const accountInfo = conn.subscriptionIdToAccount.get(subscriptionId);
 
 		if (!accountInfo) {
 			if (this.resubOpts?.logResubMessages) {
-				console.warn(`[HeliusDriftClientAccountSubscriber] Unknown subscription ID: ${subscriptionId}`);
+				console.warn(
+					`[HeliusDriftClientAccountSubscriber] Unknown subscription ID: ${subscriptionId}`
+				);
 			}
 			return;
 		}
@@ -417,7 +535,9 @@ export class HeliusDriftClientAccountSubscriber
 			const bs58 = require('bs58');
 			buffer = Buffer.from(bs58.decode(dataStr));
 		} else {
-			console.error(`[HeliusDriftClientAccountSubscriber] Unknown encoding: ${encoding}`);
+			console.error(
+				`[HeliusDriftClientAccountSubscriber] Unknown encoding: ${encoding}`
+			);
 			return;
 		}
 
@@ -442,7 +562,10 @@ export class HeliusDriftClientAccountSubscriber
 
 	private processStateUpdate(data: Buffer, slot: number): void {
 		try {
-			const stateData = this.program.account.state.coder.accounts.decode('State', data) as StateAccount;
+			const stateData = this.program.account.state.coder.accounts.decode(
+				'State',
+				data
+			) as StateAccount;
 			const existing = this.stateAccountData;
 			if (!existing || slot >= existing.slot) {
 				this.stateAccountData = { data: stateData, slot };
@@ -450,45 +573,78 @@ export class HeliusDriftClientAccountSubscriber
 				this.eventEmitter.emit('update');
 			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Error processing state update:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Error processing state update:',
+				error
+			);
 		}
 	}
 
 	private processPerpMarketUpdate(data: Buffer, slot: number): void {
 		try {
-			const marketData = this.program.account.perpMarket.coder.accounts.decodeUnchecked('PerpMarket', data) as PerpMarketAccount;
-			if (this.delistedMarketSetting !== DelistedMarketSetting.Subscribe && isVariant(marketData.status, 'delisted')) {
+			const marketData =
+				this.program.account.perpMarket.coder.accounts.decodeUnchecked(
+					'PerpMarket',
+					data
+				) as PerpMarketAccount;
+			if (
+				this.delistedMarketSetting !== DelistedMarketSetting.Subscribe &&
+				isVariant(marketData.status, 'delisted')
+			) {
 				return;
 			}
 			const existing = this.perpMarketAccountData.get(marketData.marketIndex);
 			if (!existing || slot >= existing.slot) {
-				this.perpMarketAccountData.set(marketData.marketIndex, { data: marketData, slot });
+				this.perpMarketAccountData.set(marketData.marketIndex, {
+					data: marketData,
+					slot,
+				});
 				this.eventEmitter.emit('perpMarketAccountUpdate', marketData);
 				this.eventEmitter.emit('update');
 			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Error processing perp market update:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Error processing perp market update:',
+				error
+			);
 		}
 	}
 
 	private processSpotMarketUpdate(data: Buffer, slot: number): void {
 		try {
-			const marketData = this.program.account.spotMarket.coder.accounts.decodeUnchecked('SpotMarket', data) as SpotMarketAccount;
-			if (this.delistedMarketSetting !== DelistedMarketSetting.Subscribe && isVariant(marketData.status, 'delisted')) {
+			const marketData =
+				this.program.account.spotMarket.coder.accounts.decodeUnchecked(
+					'SpotMarket',
+					data
+				) as SpotMarketAccount;
+			if (
+				this.delistedMarketSetting !== DelistedMarketSetting.Subscribe &&
+				isVariant(marketData.status, 'delisted')
+			) {
 				return;
 			}
 			const existing = this.spotMarketAccountData.get(marketData.marketIndex);
 			if (!existing || slot >= existing.slot) {
-				this.spotMarketAccountData.set(marketData.marketIndex, { data: marketData, slot });
+				this.spotMarketAccountData.set(marketData.marketIndex, {
+					data: marketData,
+					slot,
+				});
 				this.eventEmitter.emit('spotMarketAccountUpdate', marketData);
 				this.eventEmitter.emit('update');
 			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Error processing spot market update:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Error processing spot market update:',
+				error
+			);
 		}
 	}
 
-	private processOracleUpdate(oracleInfo: OracleInfo, data: Buffer, slot: number): void {
+	private processOracleUpdate(
+		oracleInfo: OracleInfo,
+		data: Buffer,
+		slot: number
+	): void {
 		try {
 			const oracleId = getOracleId(oracleInfo.publicKey, oracleInfo.source);
 			const client = this.oracleClientCache.get(
@@ -500,18 +656,30 @@ export class HeliusDriftClientAccountSubscriber
 			const existing = this.oracleData.get(oracleId);
 			if (!existing || slot >= existing.slot) {
 				this.oracleData.set(oracleId, { data: oraclePriceData, slot });
-				this.eventEmitter.emit('oraclePriceUpdate', oracleInfo.publicKey, oracleInfo.source, oraclePriceData);
+				this.eventEmitter.emit(
+					'oraclePriceUpdate',
+					oracleInfo.publicKey,
+					oracleInfo.source,
+					oraclePriceData
+				);
 				this.eventEmitter.emit('update');
 			}
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Error processing oracle update:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Error processing oracle update:',
+				error
+			);
 		}
 	}
 
 	/**
 	 * Subscribe to a single account via accountSubscribe
 	 */
-	private async subscribeToAccount(pubkey: string, type: string, oracleInfo?: OracleInfo): Promise<number> {
+	private async subscribeToAccount(
+		pubkey: string,
+		type: string,
+		oracleInfo?: OracleInfo
+	): Promise<number> {
 		const conn = await this.getAvailableConnection();
 
 		return new Promise((resolve, reject) => {
@@ -539,7 +707,16 @@ export class HeliusDriftClientAccountSubscriber
 					conn.subscriptionCount++;
 					this.totalSubscriptionCount++;
 					if (this.resubOpts?.logResubMessages) {
-						console.log(`[HeliusDriftClientAccountSubscriber] Subscribed to ${type} (${pubkey.slice(0, 8)}...) - total: ${this.totalSubscriptionCount}, conn ${this.connectionPool.indexOf(conn)}: ${conn.subscriptionCount}/${MAX_SUBSCRIPTIONS_PER_CONNECTION}`);
+						console.log(
+							`[HeliusDriftClientAccountSubscriber] Subscribed to ${type} (${pubkey.slice(
+								0,
+								8
+							)}...) - total: ${
+								this.totalSubscriptionCount
+							}, conn ${this.connectionPool.indexOf(conn)}: ${
+								conn.subscriptionCount
+							}/${MAX_SUBSCRIPTIONS_PER_CONNECTION}`
+						);
 					}
 					resolve(id);
 				},
@@ -574,7 +751,7 @@ export class HeliusDriftClientAccountSubscriber
 			}
 
 			this.isSubscribing = true;
-			this.subscriptionPromiseResolver = () => { };
+			this.subscriptionPromiseResolver = () => {};
 			this.subscriptionPromise = new Promise((res) => {
 				this.subscriptionPromiseResolver = res;
 			});
@@ -594,10 +771,16 @@ export class HeliusDriftClientAccountSubscriber
 
 				// Pre-populate with initial data
 				for (const market of perpMarketAccounts) {
-					this.perpMarketAccountData.set(market.marketIndex, { data: market, slot: 0 });
+					this.perpMarketAccountData.set(market.marketIndex, {
+						data: market,
+						slot: 0,
+					});
 				}
 				for (const market of spotMarketAccounts) {
-					this.spotMarketAccountData.set(market.marketIndex, { data: market, slot: 0 });
+					this.spotMarketAccountData.set(market.marketIndex, {
+						data: market,
+						slot: 0,
+					});
 				}
 			}
 
@@ -615,10 +798,25 @@ export class HeliusDriftClientAccountSubscriber
 
 			this.eventEmitter.emit('update');
 
-			const totalSubscriptions = this.connectionPool.reduce((sum, conn) => sum + conn.subscriptionCount, 0);
+			// Start inactivity detection
+			if (this.resubOpts?.resubTimeoutMs) {
+				this.receivingData = true;
+				this.startInactivityTimeout();
+			}
+
+			const totalSubscriptions = this.connectionPool.reduce(
+				(sum, conn) => sum + conn.subscriptionCount,
+				0
+			);
 			const totalDuration = performance.now() - startTime;
 			if (this.resubOpts?.logResubMessages) {
-				console.log(`[PROFILING] HeliusDriftClientAccountSubscriber.subscribe() completed in ${totalDuration.toFixed(2)}ms with ${totalSubscriptions} subscriptions across ${this.connectionPool.length} connections`);
+				console.log(
+					`[PROFILING] HeliusDriftClientAccountSubscriber.subscribe() completed in ${totalDuration.toFixed(
+						2
+					)}ms with ${totalSubscriptions} subscriptions across ${
+						this.connectionPool.length
+					} connections`
+				);
 			}
 			this.isSubscribed = true;
 			this.isSubscribing = false;
@@ -626,7 +824,10 @@ export class HeliusDriftClientAccountSubscriber
 
 			return true;
 		} catch (error) {
-			console.error('[HeliusDriftClientAccountSubscriber] Subscription failed:', error);
+			console.error(
+				'[HeliusDriftClientAccountSubscriber] Subscription failed:',
+				error
+			);
 			this.isSubscribing = false;
 			this.subscriptionPromiseResolver(false);
 			return false;
@@ -637,15 +838,27 @@ export class HeliusDriftClientAccountSubscriber
 	 * Subscribe to all accounts using pooled connections
 	 */
 	private async subscribeToAllAccounts(): Promise<void> {
-		const accountsToSubscribe: { pubkey: string; type: string; oracleInfo?: OracleInfo }[] = [];
+		const accountsToSubscribe: {
+			pubkey: string;
+			type: string;
+			oracleInfo?: OracleInfo;
+		}[] = [];
 
 		// State account
-		this.statePublicKey = await getDriftStateAccountPublicKey(this.program.programId);
-		accountsToSubscribe.push({ pubkey: this.statePublicKey.toBase58(), type: 'state' });
+		this.statePublicKey = await getDriftStateAccountPublicKey(
+			this.program.programId
+		);
+		accountsToSubscribe.push({
+			pubkey: this.statePublicKey.toBase58(),
+			type: 'state',
+		});
 
 		// Perp market accounts
 		for (const marketIndex of this.perpMarketIndexes) {
-			const pubkey = await getPerpMarketPublicKey(this.program.programId, marketIndex);
+			const pubkey = await getPerpMarketPublicKey(
+				this.program.programId,
+				marketIndex
+			);
 			const pubkeyStr = pubkey.toBase58();
 			this.perpMarketPublicKeys.set(pubkeyStr, marketIndex);
 			accountsToSubscribe.push({ pubkey: pubkeyStr, type: 'perpMarket' });
@@ -653,7 +866,10 @@ export class HeliusDriftClientAccountSubscriber
 
 		// Spot market accounts
 		for (const marketIndex of this.spotMarketIndexes) {
-			const pubkey = await getSpotMarketPublicKey(this.program.programId, marketIndex);
+			const pubkey = await getSpotMarketPublicKey(
+				this.program.programId,
+				marketIndex
+			);
 			const pubkeyStr = pubkey.toBase58();
 			this.spotMarketPublicKeys.set(pubkeyStr, marketIndex);
 			accountsToSubscribe.push({ pubkey: pubkeyStr, type: 'spotMarket' });
@@ -664,11 +880,17 @@ export class HeliusDriftClientAccountSubscriber
 			if (oracleInfo.publicKey.equals(PublicKey.default)) continue;
 			const pubkeyStr = oracleInfo.publicKey.toBase58();
 			this.oraclePublicKeys.set(pubkeyStr, oracleInfo);
-			accountsToSubscribe.push({ pubkey: pubkeyStr, type: 'oracle', oracleInfo });
+			accountsToSubscribe.push({
+				pubkey: pubkeyStr,
+				type: 'oracle',
+				oracleInfo,
+			});
 		}
 
 		if (this.resubOpts?.logResubMessages) {
-			console.log(`[HeliusDriftClientAccountSubscriber] Subscribing to ${accountsToSubscribe.length} accounts`);
+			console.log(
+				`[HeliusDriftClientAccountSubscriber] Subscribing to ${accountsToSubscribe.length} accounts`
+			);
 		}
 
 		// Pre-create the first connection before starting parallel subscriptions
@@ -685,7 +907,11 @@ export class HeliusDriftClientAccountSubscriber
 			const batch = accountsToSubscribe.slice(i, i + batchSize);
 			await Promise.all(
 				batch.map((account) =>
-					this.subscribeToAccount(account.pubkey, account.type, account.oracleInfo)
+					this.subscribeToAccount(
+						account.pubkey,
+						account.type,
+						account.oracleInfo
+					)
 				)
 			);
 		}
@@ -696,7 +922,10 @@ export class HeliusDriftClientAccountSubscriber
 
 		// Build list of all pubkeys to fetch
 		const allPubkeys: PublicKey[] = [];
-		const pubkeyToType = new Map<string, { type: string; oracleInfo?: OracleInfo }>();
+		const pubkeyToType = new Map<
+			string,
+			{ type: string; oracleInfo?: OracleInfo }
+		>();
 
 		if (this.statePublicKey) {
 			allPubkeys.push(this.statePublicKey);
@@ -734,18 +963,35 @@ export class HeliusDriftClientAccountSubscriber
 
 				switch (typeInfo.type) {
 					case 'state': {
-						const stateData = this.program.account.state.coder.accounts.decode('State', accountInfo.data) as StateAccount;
+						const stateData = this.program.account.state.coder.accounts.decode(
+							'State',
+							accountInfo.data
+						) as StateAccount;
 						this.stateAccountData = { data: stateData, slot: 0 };
 						break;
 					}
 					case 'perpMarket': {
-						const marketData = this.program.account.perpMarket.coder.accounts.decodeUnchecked('PerpMarket', accountInfo.data) as PerpMarketAccount;
-						this.perpMarketAccountData.set(marketData.marketIndex, { data: marketData, slot: 0 });
+						const marketData =
+							this.program.account.perpMarket.coder.accounts.decodeUnchecked(
+								'PerpMarket',
+								accountInfo.data
+							) as PerpMarketAccount;
+						this.perpMarketAccountData.set(marketData.marketIndex, {
+							data: marketData,
+							slot: 0,
+						});
 						break;
 					}
 					case 'spotMarket': {
-						const marketData = this.program.account.spotMarket.coder.accounts.decodeUnchecked('SpotMarket', accountInfo.data) as SpotMarketAccount;
-						this.spotMarketAccountData.set(marketData.marketIndex, { data: marketData, slot: 0 });
+						const marketData =
+							this.program.account.spotMarket.coder.accounts.decodeUnchecked(
+								'SpotMarket',
+								accountInfo.data
+							) as SpotMarketAccount;
+						this.spotMarketAccountData.set(marketData.marketIndex, {
+							data: marketData,
+							slot: 0,
+						});
 						break;
 					}
 					case 'oracle': {
@@ -755,8 +1001,13 @@ export class HeliusDriftClientAccountSubscriber
 								connection,
 								this.program
 							);
-							const oraclePriceData = client.getOraclePriceDataFromBuffer(accountInfo.data);
-							const oracleId = getOracleId(typeInfo.oracleInfo.publicKey, typeInfo.oracleInfo.source);
+							const oraclePriceData = client.getOraclePriceDataFromBuffer(
+								accountInfo.data
+							);
+							const oracleId = getOracleId(
+								typeInfo.oracleInfo.publicKey,
+								typeInfo.oracleInfo.source
+							);
 							this.oracleData.set(oracleId, { data: oraclePriceData, slot: 0 });
 						}
 						break;
@@ -793,7 +1044,9 @@ export class HeliusDriftClientAccountSubscriber
 			await this.subscribeToAccount(pubkeyStr, 'oracle', oracleInfo);
 
 			// Fetch initial data
-			const accountInfo = await this.program.provider.connection.getAccountInfo(oracleInfo.publicKey);
+			const accountInfo = await this.program.provider.connection.getAccountInfo(
+				oracleInfo.publicKey
+			);
 			if (accountInfo) {
 				const client = this.oracleClientCache.get(
 					oracleInfo.source,
@@ -806,7 +1059,10 @@ export class HeliusDriftClientAccountSubscriber
 
 			return true;
 		} catch (error) {
-			console.error(`[HeliusDriftClientAccountSubscriber] Failed to add oracle ${oracleInfo.publicKey.toString()}:`, error);
+			console.error(
+				`[HeliusDriftClientAccountSubscriber] Failed to add oracle ${oracleInfo.publicKey.toString()}:`,
+				error
+			);
 			return false;
 		}
 	}
@@ -891,6 +1147,9 @@ export class HeliusDriftClientAccountSubscriber
 			return;
 		}
 
+		this.clearInactivityTimeout();
+		this.receivingData = false;
+
 		// Unsubscribe and close all pooled connections
 		for (const conn of this.connectionPool) {
 			this.stopPingForConnection(conn);
@@ -898,12 +1157,14 @@ export class HeliusDriftClientAccountSubscriber
 			if (conn.ws.readyState === WebSocket.OPEN) {
 				// Unsubscribe from all accounts on this connection
 				for (const subscriptionId of conn.subscriptionIdToAccount.keys()) {
-					conn.ws.send(JSON.stringify({
-						jsonrpc: '2.0',
-						id: conn.nextRequestId++,
-						method: 'accountUnsubscribe',
-						params: [subscriptionId],
-					}));
+					conn.ws.send(
+						JSON.stringify({
+							jsonrpc: '2.0',
+							id: conn.nextRequestId++,
+							method: 'accountUnsubscribe',
+							params: [subscriptionId],
+						})
+					);
 				}
 				conn.ws.close();
 			}
@@ -928,7 +1189,9 @@ export class HeliusDriftClientAccountSubscriber
 		return this.stateAccountData!;
 	}
 
-	public getMarketAccountAndSlot(marketIndex: number): DataAndSlot<PerpMarketAccount> | undefined {
+	public getMarketAccountAndSlot(
+		marketIndex: number
+	): DataAndSlot<PerpMarketAccount> | undefined {
 		this.assertIsSubscribed();
 		return this.perpMarketAccountData.get(marketIndex);
 	}
@@ -937,7 +1200,9 @@ export class HeliusDriftClientAccountSubscriber
 		return Array.from(this.perpMarketAccountData.values());
 	}
 
-	public getSpotMarketAccountAndSlot(marketIndex: number): DataAndSlot<SpotMarketAccount> | undefined {
+	public getSpotMarketAccountAndSlot(
+		marketIndex: number
+	): DataAndSlot<SpotMarketAccount> | undefined {
 		this.assertIsSubscribed();
 		return this.spotMarketAccountData.get(marketIndex);
 	}
@@ -946,7 +1211,9 @@ export class HeliusDriftClientAccountSubscriber
 		return Array.from(this.spotMarketAccountData.values());
 	}
 
-	public getOraclePriceDataAndSlot(oracleId: string): DataAndSlot<OraclePriceData> | undefined {
+	public getOraclePriceDataAndSlot(
+		oracleId: string
+	): DataAndSlot<OraclePriceData> | undefined {
 		this.assertIsSubscribed();
 		if (oracleId === ORACLE_DEFAULT_ID) {
 			return {
@@ -957,7 +1224,9 @@ export class HeliusDriftClientAccountSubscriber
 		return this.oracleData.get(oracleId);
 	}
 
-	public getOraclePriceDataAndSlotForPerpMarket(marketIndex: number): DataAndSlot<OraclePriceData> | undefined {
+	public getOraclePriceDataAndSlotForPerpMarket(
+		marketIndex: number
+	): DataAndSlot<OraclePriceData> | undefined {
 		const perpMarketAccount = this.getMarketAccountAndSlot(marketIndex);
 		const oracle = this.perpOracleMap.get(marketIndex);
 		const oracleId = this.perpOracleStringMap.get(marketIndex);
@@ -973,7 +1242,9 @@ export class HeliusDriftClientAccountSubscriber
 		return this.getOraclePriceDataAndSlot(oracleId);
 	}
 
-	public getOraclePriceDataAndSlotForSpotMarket(marketIndex: number): DataAndSlot<OraclePriceData> | undefined {
+	public getOraclePriceDataAndSlotForSpotMarket(
+		marketIndex: number
+	): DataAndSlot<OraclePriceData> | undefined {
 		const spotMarketAccount = this.getSpotMarketAccountAndSlot(marketIndex);
 		const oracle = this.spotOracleMap.get(marketIndex);
 		const oracleId = this.spotOracleStringMap.get(marketIndex);
